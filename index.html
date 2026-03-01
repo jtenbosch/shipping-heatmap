@@ -1,0 +1,797 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>US Shipping Delay Heatmap</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/topojson-client@3/dist/topojson-client.min.js"></script>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+
+#header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 20px; background: #1a1a2e; color: #fff; z-index: 1000;
+  position: relative;
+}
+#header h1 { font-size: 1.2rem; font-weight: 600; }
+#header .meta { display: flex; align-items: center; gap: 14px; font-size: 0.85rem; }
+#header .meta span { color: #aaa; }
+#refresh-btn {
+  background: #0f3460; border: 1px solid #16213e; color: #e0e0e0;
+  padding: 6px 14px; border-radius: 4px; cursor: pointer; font-size: 0.85rem;
+}
+#refresh-btn:hover { background: #16213e; }
+#refresh-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+#map { height: calc(100vh - 78px); width: 100%; }
+
+.info-panel {
+  position: absolute; top: 88px; right: 10px; z-index: 1000;
+  background: rgba(255,255,255,0.95); padding: 12px 16px; border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.15); min-width: 200px;
+  pointer-events: none;
+}
+.info-panel h3 { margin-bottom: 4px; font-size: 1rem; }
+.info-panel .risk-badge {
+  display: inline-block; padding: 2px 8px; border-radius: 4px;
+  color: #fff; font-size: 0.8rem; font-weight: 600; margin-bottom: 4px;
+}
+.info-panel p { font-size: 0.85rem; color: #555; }
+
+#detail-overlay {
+  position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0,0,0,0.3); z-index: 2000; display: none;
+}
+#detail-panel {
+  position: fixed; top: 0; right: 0; bottom: 0; width: 420px; max-width: 100%;
+  background: #fff; z-index: 2001; transform: translateX(100%);
+  transition: transform 0.25s ease; overflow-y: auto;
+  box-shadow: -4px 0 16px rgba(0,0,0,0.1);
+}
+#detail-panel.open { transform: translateX(0); }
+#detail-panel .panel-header {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 16px 20px; border-bottom: 1px solid #eee; position: sticky; top: 0;
+  background: #fff;
+}
+#detail-panel .panel-header h2 { font-size: 1.1rem; }
+#detail-panel .close-btn {
+  background: none; border: none; font-size: 1.4rem; cursor: pointer; color: #888;
+}
+#detail-panel .panel-body { padding: 16px 20px; }
+.alert-card {
+  border: 1px solid #e0e0e0; border-radius: 6px; padding: 12px;
+  margin-bottom: 10px; border-left: 4px solid #ccc;
+}
+.alert-card.severity-extreme { border-left-color: #7b2d8b; }
+.alert-card.severity-severe { border-left-color: #d32f2f; }
+.alert-card.severity-moderate { border-left-color: #f57c00; }
+.alert-card.severity-minor { border-left-color: #fbc02d; }
+.alert-card .alert-event { font-weight: 600; font-size: 0.95rem; }
+.alert-card .alert-severity { font-size: 0.75rem; text-transform: uppercase; color: #888; }
+.alert-card .alert-headline { font-size: 0.85rem; color: #444; margin-top: 4px; }
+.alert-card .alert-time { font-size: 0.75rem; color: #999; margin-top: 4px; }
+
+.legend {
+  position: absolute; bottom: 20px; right: 10px; z-index: 1000;
+  background: rgba(255,255,255,0.95); padding: 10px 14px; border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.15); font-size: 0.8rem;
+}
+.legend h4 { margin-bottom: 6px; font-size: 0.85rem; }
+.legend-row { display: flex; align-items: center; gap: 6px; margin-bottom: 3px; }
+.legend-color { width: 20px; height: 14px; border-radius: 2px; border: 1px solid rgba(0,0,0,0.1); }
+
+#loading {
+  position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(255,255,255,0.85); z-index: 3000;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+}
+#loading.hidden { display: none; }
+.spinner {
+  width: 40px; height: 40px; border: 4px solid #e0e0e0;
+  border-top-color: #1a1a2e; border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+#loading p { margin-top: 12px; color: #555; }
+
+.summary-bar {
+  display: flex; gap: 16px; padding: 8px 20px; background: #f8f9fa;
+  border-bottom: 1px solid #e0e0e0; font-size: 0.85rem; color: #555;
+  flex-wrap: wrap;
+}
+.summary-stat { font-weight: 600; }
+
+#error-banner {
+  display: none; background: #fff3cd; color: #856404; padding: 10px 20px;
+  text-align: center; font-size: 0.85rem;
+}
+
+/* Hub markers */
+.hub-marker { position: relative; cursor: pointer; }
+.hub-star {
+  width: 12px; height: 12px; position: absolute; top: -6px; left: -6px;
+  background: #111; clip-path: polygon(50% 0%, 61% 35%, 98% 35%, 68% 57%, 79% 91%, 50% 70%, 21% 91%, 32% 57%, 2% 35%, 39% 35%);
+  filter: drop-shadow(0 0 2px rgba(255,255,255,0.8));
+}
+.hub-tooltip {
+  position: absolute; bottom: 12px; left: 50%; transform: translateX(-50%);
+  white-space: nowrap; background: rgba(26,26,46,0.9); color: #fff;
+  font-size: 11px; padding: 3px 8px; border-radius: 3px; font-weight: 600;
+  pointer-events: none; box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+  opacity: 0; transition: opacity 0.15s;
+}
+.hub-marker:hover .hub-tooltip { opacity: 1; }
+
+/* Report modal */
+#report-overlay {
+  position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0,0,0,0.4); z-index: 2500; display: none;
+  justify-content: center; align-items: center;
+}
+#report-overlay.open { display: flex; }
+#report-modal {
+  background: #fff; border-radius: 10px; max-width: 520px; width: 90%;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.2); overflow: hidden;
+}
+#report-modal .report-header {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 14px 20px; border-bottom: 1px solid #eee;
+}
+#report-modal .report-header h2 { font-size: 1rem; }
+#report-modal .close-btn {
+  background: none; border: none; font-size: 1.4rem; cursor: pointer; color: #888;
+}
+.report-status {
+  display: inline-block; padding: 3px 10px; border-radius: 4px;
+  color: #fff; font-size: 0.8rem; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.report-status.high { background: #e74c3c; }
+.report-status.moderate { background: #e67e22; }
+.report-status.low { background: #2ecc71; }
+#report-body {
+  padding: 16px 20px; font-size: 0.9rem; line-height: 1.5; color: #333;
+  max-height: 60vh; overflow-y: auto;
+}
+#report-btn {
+  border: none; color: #fff;
+  padding: 7px 18px; border-radius: 5px; cursor: pointer; font-size: 0.9rem;
+  font-weight: 600; letter-spacing: 0.3px; background: #888;
+}
+#report-btn.high { background: #e74c3c; }
+#report-btn.high:hover { background: #c0392b; }
+#report-btn.moderate { background: #e67e22; }
+#report-btn.moderate:hover { background: #d35400; }
+#report-btn.low { background: #2ecc71; }
+#report-btn.low:hover { background: #27ae60; }
+
+@media (max-width: 600px) {
+  #detail-panel { width: 100%; }
+  .info-panel { display: none; }
+  #report-modal { width: 95%; }
+}
+</style>
+</head>
+<body>
+
+<div id="header">
+  <h1>US Shipping Delay Heatmap — County Level</h1>
+  <div class="meta">
+    <span id="last-updated">Loading...</span>
+    <button id="report-btn" onclick="openReport()">Report</button>
+    <button id="refresh-btn" onclick="refreshData()">Refresh</button>
+  </div>
+</div>
+<div id="error-banner"></div>
+<div class="summary-bar" id="summary-bar"></div>
+<div id="map"></div>
+
+<div class="info-panel" id="info-panel">
+  <h3 id="info-state">Hover over a county</h3>
+  <p id="info-details"></p>
+</div>
+
+<div class="legend">
+  <h4>Delay Risk</h4>
+  <div class="legend-row"><div class="legend-color" style="background:#2ecc71"></div> No delays</div>
+  <div class="legend-row"><div class="legend-color" style="background:#f1c40f"></div> Minor</div>
+  <div class="legend-row"><div class="legend-color" style="background:#e67e22"></div> Moderate</div>
+  <div class="legend-row"><div class="legend-color" style="background:#e74c3c"></div> Significant</div>
+  <div class="legend-row"><div class="legend-color" style="background:#8e44ad"></div> Severe</div>
+</div>
+
+<div id="detail-overlay" onclick="closeDetail()"></div>
+<div id="detail-panel">
+  <div class="panel-header">
+    <h2 id="detail-title">County</h2>
+    <button class="close-btn" onclick="closeDetail()">&times;</button>
+  </div>
+  <div class="panel-body" id="detail-body"></div>
+</div>
+
+<div id="report-overlay" onclick="closeReport(event)">
+  <div id="report-modal">
+    <div class="report-header">
+      <h2>Shipping Delay Report</h2>
+      <button class="close-btn" onclick="closeReport()">&times;</button>
+    </div>
+    <div id="report-body"></div>
+  </div>
+</div>
+
+<div id="loading">
+  <div class="spinner"></div>
+  <p>Loading weather alerts...</p>
+</div>
+
+<script>
+// ── State FIPS → abbreviation ────────────────────────────────────
+const stateFips = {
+  '01':'AL','02':'AK','04':'AZ','05':'AR','06':'CA','08':'CO','09':'CT',
+  '10':'DE','11':'DC','12':'FL','13':'GA','15':'HI','16':'ID','17':'IL',
+  '18':'IN','19':'IA','20':'KS','21':'KY','22':'LA','23':'ME','24':'MD',
+  '25':'MA','26':'MI','27':'MN','28':'MS','29':'MO','30':'MT','31':'NE',
+  '32':'NV','33':'NH','34':'NJ','35':'NM','36':'NY','37':'NC','38':'ND',
+  '39':'OH','40':'OK','41':'OR','42':'PA','44':'RI','45':'SC','46':'SD',
+  '47':'TN','48':'TX','49':'UT','50':'VT','51':'VA','53':'WA','54':'WV',
+  '55':'WI','56':'WY'
+};
+const stateNames = {
+  AL:'Alabama',AK:'Alaska',AZ:'Arizona',AR:'Arkansas',CA:'California',
+  CO:'Colorado',CT:'Connecticut',DE:'Delaware',FL:'Florida',GA:'Georgia',
+  HI:'Hawaii',ID:'Idaho',IL:'Illinois',IN:'Indiana',IA:'Iowa',KS:'Kansas',
+  KY:'Kentucky',LA:'Louisiana',ME:'Maine',MD:'Maryland',MA:'Massachusetts',
+  MI:'Michigan',MN:'Minnesota',MS:'Mississippi',MO:'Missouri',MT:'Montana',
+  NE:'Nebraska',NV:'Nevada',NH:'New Hampshire',NJ:'New Jersey',NM:'New Mexico',
+  NY:'New York',NC:'North Carolina',ND:'North Dakota',OH:'Ohio',OK:'Oklahoma',
+  OR:'Oregon',PA:'Pennsylvania',RI:'Rhode Island',SC:'South Carolina',
+  SD:'South Dakota',TN:'Tennessee',TX:'Texas',UT:'Utah',VT:'Vermont',
+  VA:'Virginia',WA:'Washington',WV:'West Virginia',WI:'Wisconsin',WY:'Wyoming',
+  DC:'District of Columbia'
+};
+
+// Valid state FIPS prefixes (to filter out marine/territory SAME codes)
+const validStateFips = new Set(Object.keys(stateFips));
+
+// ── Scoring ──────────────────────────────────────────────────────
+const eventScores = {
+  'Blizzard': 10, 'Ice Storm': 10, 'Winter Storm': 8, 'Heavy Snow': 7,
+  'Winter Weather': 5, 'Freezing Rain': 7, 'Wind Chill': 4, 'Extreme Cold': 5,
+  'Frost': 2, 'Freeze': 3,
+  'Hurricane': 10, 'Tropical Storm': 8, 'Storm Surge': 7, 'Tornado': 9,
+  'Severe Thunderstorm': 6, 'Flash Flood': 8, 'Flood': 7, 'Coastal Flood': 5,
+  'High Wind': 6, 'Extreme Wind': 9, 'Wind': 4, 'Dust Storm': 6,
+  'Dense Fog': 5, 'Freezing Fog': 6, 'Fire Weather': 2, 'Red Flag': 2,
+  'Excessive Heat': 3, 'Heat': 2, 'Dense Smoke': 5, 'Avalanche': 5,
+};
+const severityMultiplier = {
+  'Extreme': 2.0, 'Severe': 1.5, 'Moderate': 1.0, 'Minor': 0.6, 'Unknown': 0.8
+};
+
+// Curated non-weather disruptions (update manually as needed)
+const fedexAlerts = [
+  // { fips: ['06001','06013'], event: 'FedEx Facility Closure', severity: 'Moderate',
+  //   headline: 'Oakland hub temporary closure', score: 6 }
+];
+
+// ── County name lookup (built from TopoJSON after load) ──────────
+let countyNameLookup = {}; // fips -> name
+
+// ── Data state ───────────────────────────────────────────────────
+let countyScores = {};
+let topoData = null;
+let countyLayer = null;
+let stateOutlineLayer = null;
+let highlightLayer = null;
+
+// ── Color scale ──────────────────────────────────────────────────
+function getColor(score) {
+  if (score <= 0) return '#dfe6e0';
+  if (score <= 8) return '#f1c40f';
+  if (score <= 20) return '#e67e22';
+  if (score <= 40) return '#e74c3c';
+  return '#8e44ad';
+}
+function getRiskLabel(score) {
+  if (score <= 0) return 'No delays';
+  if (score <= 8) return 'Minor';
+  if (score <= 20) return 'Moderate';
+  if (score <= 40) return 'Significant';
+  return 'Severe';
+}
+
+// ── Map setup ────────────────────────────────────────────────────
+const map = L.map('map', {
+  center: [39.5, -98.5], zoom: 4, minZoom: 3, maxZoom: 10
+});
+
+L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+  attribution: '&copy; OSM &copy; CARTO',
+  subdomains: 'abcd', maxZoom: 19
+}).addTo(map);
+
+// ── Fetch & process NWS alerts ───────────────────────────────────
+async function fetchAlerts() {
+  const url = 'https://api.weather.gov/alerts/active?status=actual&message_type=alert,update';
+  const resp = await fetch(url, {
+    headers: { 'User-Agent': 'ShippingDelayHeatmap/1.0 (shipping-heatmap-poc)' }
+  });
+  if (!resp.ok) throw new Error('NWS API returned ' + resp.status);
+  return await resp.json();
+}
+
+function processAlerts(data) {
+  countyScores = {};
+
+  const features = data.features || [];
+  for (const f of features) {
+    const props = f.properties;
+    const event = props.event || '';
+    const severity = props.severity || 'Unknown';
+
+    // Match event to scoring whitelist
+    let baseScore = 0;
+    for (const [key, score] of Object.entries(eventScores)) {
+      if (event.toLowerCase().includes(key.toLowerCase())) {
+        baseScore = score;
+        break;
+      }
+    }
+    // Try stripping Warning/Watch/Advisory suffix
+    if (baseScore === 0) {
+      const stripped = event.toLowerCase().replace(/ warning| watch| advisory/g, '').trim();
+      for (const [key, score] of Object.entries(eventScores)) {
+        if (stripped === key.toLowerCase()) {
+          baseScore = score;
+          break;
+        }
+      }
+    }
+    if (baseScore === 0) continue;
+
+    const mult = severityMultiplier[severity] || 0.8;
+    const impactScore = baseScore * mult;
+
+    const alertInfo = {
+      event: props.event,
+      severity,
+      headline: props.headline || props.event,
+      onset: props.onset,
+      expires: props.expires,
+      score: impactScore
+    };
+
+    // Map SAME codes to county FIPS (SAME format: 0SSCCC -> FIPS: SSCCC)
+    const geocodes = props.geocode || {};
+    const sameCodes = geocodes.SAME || [];
+
+    for (const same of sameCodes) {
+      if (same.length !== 6) continue;
+      const fips = same.substring(1); // strip leading 0
+      const stFips = fips.substring(0, 2);
+      if (!validStateFips.has(stFips)) continue; // skip marine/territory
+
+      if (!countyScores[fips]) {
+        const name = countyNameLookup[fips] || 'Unknown';
+        const stAbbr = stateFips[stFips] || '';
+        countyScores[fips] = { score: 0, alerts: [], name, state: stAbbr };
+      }
+      countyScores[fips].score += impactScore;
+      countyScores[fips].alerts.push(alertInfo);
+    }
+  }
+
+  // Merge FedEx curated alerts
+  for (const alert of fedexAlerts) {
+    for (const fips of (alert.fips || [])) {
+      if (!countyScores[fips]) {
+        const stFips = fips.substring(0, 2);
+        countyScores[fips] = {
+          score: 0, alerts: [],
+          name: countyNameLookup[fips] || 'Unknown',
+          state: stateFips[stFips] || ''
+        };
+      }
+      countyScores[fips].score += alert.score || 5;
+      countyScores[fips].alerts.push({
+        event: alert.event, severity: alert.severity || 'Moderate',
+        headline: alert.headline, score: alert.score || 5, source: 'FedEx'
+      });
+    }
+  }
+}
+
+// ── Render map ───────────────────────────────────────────────────
+function renderMap() {
+  if (countyLayer) { map.removeLayer(countyLayer); }
+  if (stateOutlineLayer) { map.removeLayer(stateOutlineLayer); }
+  if (highlightLayer) { map.removeLayer(highlightLayer); }
+
+  const countiesGeo = topojson.feature(topoData, topoData.objects.counties);
+  countyLayer = L.geoJSON(countiesGeo, {
+    style: feature => {
+      const fips = feature.id;
+      const data = countyScores[fips];
+      const score = data ? data.score : 0;
+      return {
+        fillColor: getColor(score),
+        weight: 0.3, color: '#999',
+        fillOpacity: score > 0 ? 0.75 : 0.3
+      };
+    },
+    onEachFeature: (feature, layer) => {
+      layer.on({
+        mouseover: e => highlightCounty(e, feature),
+        mouseout: resetHighlight,
+        click: () => showDetail(feature)
+      });
+    }
+  }).addTo(map);
+
+  const statesGeo = topojson.feature(topoData, topoData.objects.states);
+  stateOutlineLayer = L.geoJSON(statesGeo, {
+    style: { fill: false, weight: 1.5, color: '#555', opacity: 0.6 },
+    interactive: false
+  }).addTo(map);
+
+  highlightLayer = L.geoJSON(null, {
+    style: { fill: false, weight: 2.5, color: '#333', opacity: 1 },
+    interactive: false
+  }).addTo(map);
+
+  // Shipping hub markers
+  addHubMarkers();
+}
+
+const shippingHubs = [
+  { name: 'FedEx Superhub — Memphis, TN', lat: 35.0424, lng: -89.9767, fips: '47157' },
+];
+
+function addHubMarkers() {
+  for (const hub of shippingHubs) {
+    const icon = L.divIcon({
+      className: 'hub-marker',
+      html: '<div class="hub-star"></div><div class="hub-tooltip">' + hub.name + '</div>',
+      iconSize: [12, 12],
+      iconAnchor: [6, 6]
+    });
+    const marker = L.marker([hub.lat, hub.lng], { icon, pane: 'markerPane' }).addTo(map);
+    marker.on('mouseover', () => {
+      const data = countyScores[hub.fips];
+      const score = data ? data.score : 0;
+      const alertCount = data ? data.alerts.length : 0;
+      document.getElementById('info-state').textContent = hub.name;
+      let eventSummary = '';
+      if (data && data.alerts.length > 0) {
+        const types = [...new Set(data.alerts.map(a => a.event.replace(/ Warning| Advisory| Watch/g, '').trim()))];
+        eventSummary = '<br><span style="color:#333;font-size:0.8rem">' + types.join(', ') + '</span>';
+      }
+      const badge = '<span class="risk-badge" style="background:' + getColor(score) + '">' + getRiskLabel(score) + '</span>';
+      document.getElementById('info-details').innerHTML =
+        badge + '<br>' + alertCount + ' alert' + (alertCount !== 1 ? 's' : '') + ' &middot; Score: ' + Math.round(score) + eventSummary;
+    });
+    marker.on('mouseout', () => {
+      document.getElementById('info-state').textContent = 'Hover over a county';
+      document.getElementById('info-details').innerHTML = '';
+    });
+    marker.on('click', () => {
+      // Find the Shelby County feature and show detail
+      if (countyLayer) {
+        countyLayer.eachLayer(layer => {
+          if (layer.feature && layer.feature.id === hub.fips) {
+            showDetail(layer.feature);
+          }
+        });
+      }
+    });
+  }
+}
+
+// ── Interactions ─────────────────────────────────────────────────
+function highlightCounty(e, feature) {
+  highlightLayer.clearLayers();
+  highlightLayer.addData(feature);
+
+  const fips = feature.id;
+  const data = countyScores[fips];
+  const countyName = data ? data.name : (feature.properties.name || 'Unknown');
+  const stAbbr = data ? data.state : stateFips[fips.substring(0, 2)] || '';
+  const stName = stateNames[stAbbr] || stAbbr;
+  const score = data ? data.score : 0;
+  const alertCount = data ? data.alerts.length : 0;
+
+  let eventSummary = '';
+  if (data && data.alerts.length > 0) {
+    const types = [...new Set(data.alerts.map(a =>
+      a.event.replace(/ Warning| Advisory| Watch/g, '').trim()
+    ))];
+    eventSummary = '<br><span style="color:#333;font-size:0.8rem">' + types.join(', ') + '</span>';
+  }
+
+  document.getElementById('info-state').textContent = countyName + ', ' + stName;
+  const badge = '<span class="risk-badge" style="background:' + getColor(score) + '">' + getRiskLabel(score) + '</span>';
+  document.getElementById('info-details').innerHTML =
+    badge + '<br>' + alertCount + ' alert' + (alertCount !== 1 ? 's' : '') + ' &middot; Score: ' + Math.round(score) + eventSummary;
+}
+
+function resetHighlight(e) {
+  highlightLayer.clearLayers();
+  document.getElementById('info-state').textContent = 'Hover over a county';
+  document.getElementById('info-details').innerHTML = '';
+}
+
+function showDetail(feature) {
+  const fips = feature.id;
+  const data = countyScores[fips];
+  const countyName = data ? data.name : (feature.properties.name || 'Unknown');
+  const stAbbr = data ? data.state : stateFips[fips.substring(0, 2)] || '';
+  const stName = stateNames[stAbbr] || stAbbr;
+  const score = data ? data.score : 0;
+
+  document.getElementById('detail-title').textContent =
+    countyName + ', ' + stName + ' — ' + getRiskLabel(score);
+
+  const body = document.getElementById('detail-body');
+  if (!data || data.alerts.length === 0) {
+    body.innerHTML = '<p style="color:#888">No active shipping-relevant alerts for this county.</p>';
+  } else {
+    const sorted = [...data.alerts].sort((a, b) => b.score - a.score);
+    body.innerHTML = sorted.map(a => {
+      const sevClass = 'severity-' + (a.severity || 'unknown').toLowerCase();
+      const timeStr = a.onset ? formatTime(a.onset) + (a.expires ? ' — ' + formatTime(a.expires) : '') : '';
+      const source = a.source ? ' <span style="color:#0f3460;font-size:0.75rem">[' + a.source + ']</span>' : '';
+      return '<div class="alert-card ' + sevClass + '">' +
+        '<div class="alert-event">' + a.event + source + '</div>' +
+        '<div class="alert-severity">' + a.severity + ' &middot; Impact: ' + Math.round(a.score) + '</div>' +
+        (a.headline && a.headline !== a.event ? '<div class="alert-headline">' + a.headline + '</div>' : '') +
+        (timeStr ? '<div class="alert-time">' + timeStr + '</div>' : '') +
+        '</div>';
+    }).join('');
+  }
+
+  document.getElementById('detail-overlay').style.display = 'block';
+  document.getElementById('detail-panel').classList.add('open');
+}
+
+function closeDetail() {
+  document.getElementById('detail-overlay').style.display = 'none';
+  document.getElementById('detail-panel').classList.remove('open');
+}
+
+function formatTime(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) + ' ' +
+         d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+}
+
+function renderSummary() {
+  const entries = Object.values(countyScores).filter(d => d.score > 0);
+  const totalAlerts = entries.reduce((s, d) => s + d.alerts.length, 0);
+  const severe = entries.filter(d => d.score > 40).length;
+  const significant = entries.filter(d => d.score > 20 && d.score <= 40).length;
+  const moderate = entries.filter(d => d.score > 8 && d.score <= 20).length;
+  const statesAffected = new Set(entries.map(d => d.state)).size;
+  document.getElementById('summary-bar').innerHTML =
+    '<span><span class="summary-stat">' + entries.length + '</span> counties affected</span>' +
+    '<span><span class="summary-stat">' + statesAffected + '</span> states</span>' +
+    '<span><span class="summary-stat">' + totalAlerts + '</span> total alerts</span>' +
+    (severe ? '<span style="color:#8e44ad"><span class="summary-stat">' + severe + '</span> severe</span>' : '') +
+    (significant ? '<span style="color:#e74c3c"><span class="summary-stat">' + significant + '</span> significant</span>' : '') +
+    (moderate ? '<span style="color:#e67e22"><span class="summary-stat">' + moderate + '</span> moderate</span>' : '');
+}
+
+// ── Report generation ────────────────────────────────────────────
+const reportRegions = {
+  'Northeast': ['CT','DE','ME','MD','MA','NH','NJ','NY','PA','RI','VT','DC'],
+  'Southeast': ['AL','FL','GA','KY','MS','NC','SC','TN','VA','WV'],
+  'Midwest': ['IL','IN','IA','KS','MI','MN','MO','NE','ND','OH','SD','WI'],
+  'South Central': ['AR','LA','OK','TX'],
+  'Mountain West': ['AZ','CO','ID','MT','NM','NV','UT','WY'],
+  'Pacific': ['AK','CA','HI','OR','WA'],
+};
+
+// Key shipping infrastructure by state for contextual callouts
+const shippingInfra = {
+  TN: 'FedEx Memphis superhub', KY: 'UPS Worldport (Louisville)',
+  OH: 'DHL Americas hub (Cincinnati)', IL: 'Chicago rail/freight hub',
+  TX: 'major distribution corridors (I-10, I-35)', CA: 'LA/Long Beach ports',
+  NJ: 'Port Newark/Elizabeth', NY: 'JFK air freight hub',
+  GA: 'Atlanta distribution hub', PA: 'I-95 corridor',
+  WA: 'Port of Seattle/Tacoma', LA: 'Port of New Orleans',
+};
+
+// Major interstates by state for route callouts
+const stateInterstates = {
+  TX: 'I-10, I-35, I-30', MO: 'I-70, I-44', KS: 'I-70, I-35',
+  IL: 'I-55, I-80, I-70', PA: 'I-76, I-80, I-95', NY: 'I-87, I-90, I-95',
+  NJ: 'I-95, I-78', MA: 'I-90, I-95', VA: 'I-81, I-95', NC: 'I-40, I-85',
+  GA: 'I-75, I-85', TN: 'I-40, I-65', KY: 'I-64, I-75', OH: 'I-70, I-75',
+  IN: 'I-65, I-70', MI: 'I-94, I-75', MN: 'I-94, I-35', IA: 'I-80, I-35',
+  NE: 'I-80', OK: 'I-40, I-35', AR: 'I-40, I-30', LA: 'I-10, I-20',
+  FL: 'I-75, I-95', CO: 'I-70, I-25', WA: 'I-5, I-90', OR: 'I-5, I-84',
+  CA: 'I-5, I-10', AZ: 'I-10, I-40',
+};
+
+function generateReport() {
+  const entries = Object.values(countyScores).filter(d => d.score > 0);
+  if (entries.length === 0) {
+    return { level: 'low', html: '<p><span class="report-status low">LOW RISK</span></p><p>No significant weather alerts affecting shipping. All clear.</p>' };
+  }
+
+  // Aggregate to state level
+  const stData = {};
+  for (const d of entries) {
+    const st = d.state;
+    if (!stData[st]) stData[st] = { score: 0, counties: 0, events: {} };
+    stData[st].score += d.score;
+    stData[st].counties += 1;
+    for (const a of d.alerts) {
+      const evt = a.event.replace(/ Warning| Advisory| Watch/g, '').trim();
+      stData[st].events[evt] = (stData[st].events[evt] || 0) + 1;
+    }
+  }
+
+  // Aggregate to region level
+  const regionData = {};
+  for (const [region, states] of Object.entries(reportRegions)) {
+    const rStates = {};
+    for (const st of states) {
+      if (stData[st]) rStates[st] = stData[st];
+    }
+    if (Object.keys(rStates).length === 0) continue;
+    const totalScore = Object.values(rStates).reduce((s, d) => s + d.score, 0);
+    const totalCounties = Object.values(rStates).reduce((s, d) => s + d.counties, 0);
+    const events = {};
+    for (const d of Object.values(rStates)) {
+      for (const [evt, cnt] of Object.entries(d.events)) events[evt] = (events[evt] || 0) + cnt;
+    }
+    regionData[region] = {
+      score: totalScore, counties: totalCounties, states: rStates,
+      topEvents: Object.entries(events).sort((a, b) => b[1] - a[1]).slice(0, 3),
+      topStates: Object.entries(rStates).sort((a, b) => b[1].score - a[1].score).slice(0, 3)
+    };
+  }
+
+  // Determine overall level
+  const totalCounties = entries.length;
+  const maxRegionScore = Math.max(...Object.values(regionData).map(r => r.score));
+  const severeCounties = entries.filter(d => d.score > 40).length;
+  const significantCounties = entries.filter(d => d.score > 20).length;
+
+  let level, statusLabel;
+  if (severeCounties > 20 || maxRegionScore > 3000 || totalCounties > 800) {
+    level = 'high'; statusLabel = 'HIGH DISRUPTION';
+  } else if (significantCounties > 20 || maxRegionScore > 1000 || totalCounties > 300) {
+    level = 'moderate'; statusLabel = 'MODERATE DISRUPTION';
+  } else {
+    level = 'low'; statusLabel = 'LOW RISK';
+  }
+
+  // Build narrative
+  let html = '<p><span class="report-status ' + level + '">' + statusLabel + '</span></p>';
+
+  // Sort regions by score
+  const sortedRegions = Object.entries(regionData).sort((a, b) => b[1].score - a[1].score);
+
+  if (level === 'low') {
+    // Brief for low risk
+    if (sortedRegions.length === 0) {
+      html += '<p>No significant weather alerts affecting shipping. All clear.</p>';
+    } else {
+      const parts = [];
+      for (const [region, rd] of sortedRegions.slice(0, 2)) {
+        const topEvts = rd.topEvents.map(e => e[0]).join(', ');
+        const topSts = rd.topStates.map(([st, d]) => stateNames[st] + ' (' + d.counties + ' counties)').join(', ');
+        let detail = topEvts + ' across ' + topSts;
+        // Check for infrastructure callouts
+        const infraHit = rd.topStates.find(([st]) => shippingInfra[st]);
+        const routeHit = rd.topStates.find(([st]) => stateInterstates[st]);
+        if (routeHit) detail += ', may cause minor delays on ' + stateInterstates[routeHit[0]];
+        parts.push(region + ': ' + detail);
+      }
+      html += '<p>' + parts.join('. ') + '. No significant nationwide shipping delays expected.</p>';
+    }
+  } else {
+    // Detailed for moderate/high
+    for (const [region, rd] of sortedRegions) {
+      if (rd.score < 50) continue; // skip negligible regions
+      const topEvts = rd.topEvents.map(e => e[0]).join(', ');
+      const topSts = rd.topStates.slice(0, 3);
+      const stDetail = topSts.map(([st, d]) => stateNames[st] + ' (' + d.counties + ' counties)').join(', ');
+
+      let sentence = '<strong>' + region + ':</strong> ' + topEvts + ' affecting ' + stDetail + '.';
+
+      // Infrastructure callouts
+      for (const [st] of topSts) {
+        if (shippingInfra[st] && stData[st].score > 200) {
+          sentence += ' Directly impacts ' + shippingInfra[st] + '.';
+          break;
+        }
+      }
+
+      // Route callouts
+      const majorRouteState = topSts.find(([st]) => stateInterstates[st] && stData[st].score > 100);
+      if (majorRouteState) {
+        sentence += ' Expect delays on ' + stateInterstates[majorRouteState[0]] + '.';
+      }
+
+      html += '<p>' + sentence + '</p>';
+    }
+
+    // Delay estimate
+    if (level === 'high') {
+      html += '<p>Expect 1-3 day ground shipping delays in affected regions, with potential for extended delays in areas under ice storm or blizzard warnings.</p>';
+    } else {
+      html += '<p>Expect 1-2 day ground shipping delays in the most affected areas.</p>';
+    }
+  }
+
+  return { level, html };
+}
+
+function openReport() {
+  const report = generateReport();
+  document.getElementById('report-body').innerHTML = report.html;
+  document.getElementById('report-overlay').classList.add('open');
+}
+
+function closeReport(e) {
+  if (e && e.target !== e.currentTarget) return;
+  document.getElementById('report-overlay').classList.remove('open');
+}
+
+// ── Main flow ────────────────────────────────────────────────────
+async function refreshData() {
+  const btn = document.getElementById('refresh-btn');
+  const loading = document.getElementById('loading');
+  const errorBanner = document.getElementById('error-banner');
+
+  btn.disabled = true;
+  loading.classList.remove('hidden');
+  errorBanner.style.display = 'none';
+
+  try {
+    // Load TopoJSON on first run
+    if (!topoData) {
+      const topoResp = await fetch('https://cdn.jsdelivr.net/npm/us-atlas@3/counties-10m.json');
+      topoData = await topoResp.json();
+      // Build county name lookup
+      for (const g of topoData.objects.counties.geometries) {
+        countyNameLookup[g.id] = g.properties.name;
+      }
+    }
+
+    const alertData = await fetchAlerts();
+    processAlerts(alertData);
+    renderMap();
+    renderSummary();
+    // Update report button color to match risk level
+    const report = generateReport();
+    const reportBtn = document.getElementById('report-btn');
+    reportBtn.className = '';
+    reportBtn.classList.add(report.level);
+    reportBtn.id = 'report-btn';
+    document.getElementById('last-updated').textContent =
+      'Updated: ' + new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+  } catch (err) {
+    console.error('Error loading data:', err);
+    errorBanner.textContent = 'Failed to load data: ' + err.message + '. Try refreshing.';
+    errorBanner.style.display = 'block';
+    if (topoData) renderMap();
+  } finally {
+    loading.classList.add('hidden');
+    btn.disabled = false;
+  }
+}
+
+document.addEventListener('keydown', e => { if (e.key === 'Escape') { closeDetail(); closeReport(); } });
+
+refreshData();
+</script>
+</body>
+</html>
