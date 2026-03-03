@@ -20,10 +20,8 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      - name: Generate report and post to Slack
-        run: node daily-report.js
-        env:
-          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+      - name: Generate screenshot and report data
+        run: node daily-report.js --screenshot
 
       - name: Commit and push screenshot
         run: |
@@ -32,3 +30,11 @@ jobs:
           git add screenshots/latest.png
           git diff --cached --quiet || git commit -m "Update daily heatmap screenshot"
           git push
+
+      - name: Wait for GitHub Pages deployment
+        run: sleep 90
+
+      - name: Post report to Slack
+        run: node daily-report.js --post
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}

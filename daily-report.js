@@ -3,11 +3,12 @@
  * Daily Shipping Report Automation
  * Runs via GitHub Actions (Mon-Sat 5am PST) or manually.
  *
- * 1. Launches Puppeteer, loads index.html, waits for NWS data
- * 2. Extracts report via page.evaluate(() => generateReport())
- * 3. Converts HTML to Slack mrkdwn
- * 4. Captures clean screenshot
- * 5. Posts to Slack via Block Kit (section + image + button)
+ * Two modes (run via CLI flag):
+ *   --screenshot  Generate screenshot + save report data to report.json
+ *   --post        Read report.json and post to Slack
+ *
+ * This split allows the workflow to push the screenshot to GitHub Pages
+ * before posting to Slack, so the embedded image URL is always current.
  */
 const puppeteer = require('puppeteer');
 const path = require('path');
@@ -17,6 +18,7 @@ const SLACK_CHANNEL = 'C0AJPKT1FTJ';
 const HEATMAP_URL = 'https://jtenbosch.github.io/shipping-heatmap/';
 const SCREENSHOT_URL = 'https://jtenbosch.github.io/shipping-heatmap/screenshots/latest.png';
 const MEMPHIS_FIPS = '47157';
+const REPORT_JSON = path.join(__dirname, 'report.json');
 
 // ── Helpers ──────────────────────────────────────────────────────
 
@@ -86,15 +88,9 @@ async function loadPageWithRetry(page, url, maxAttempts = 3) {
   }
 }
 
-// ── Main ─────────────────────────────────────────────────────────
+// ── Screenshot mode ──────────────────────────────────────────────
 
-(async () => {
-  const token = process.env.SLACK_BOT_TOKEN;
-  if (!token) {
-    console.error('SLACK_BOT_TOKEN environment variable is required');
-    process.exit(1);
-  }
-
+async function runScreenshot() {
   const browser = await puppeteer.launch({
     headless: true,
     args: ['--no-sandbox', '--disable-setuid-sandbox']
@@ -142,47 +138,86 @@ async function loadPageWithRetry(page, url, maxAttempts = 3) {
     await page.screenshot({ path: screenshotPath, type: 'png' });
     console.log(`Screenshot saved: ${screenshotPath}`);
 
-    // Build Slack message
-    const date = formatDate();
-    const emoji = { high: ':red_circle:', moderate: ':large_orange_circle:', low: ':large_green_circle:' }[report.level];
-    const riskLabel = { high: 'HIGH DISRUPTION', moderate: 'MODERATE DISRUPTION', low: 'LOW RISK' }[report.level];
-    const cacheBust = Date.now();
-
-    let messageBody = `${emoji} *Shipping Report — ${date}*\n*${riskLabel}*\n\n${reportText}`;
-
-    // Add Memphis superhub callout for moderate/high
-    if (memphisAffected && report.level !== 'low') {
-      messageBody += `\n\n:warning: *FedEx Memphis Superhub (Shelby County, TN)* under ${memphisAlert} — expect significant delays on packages routing through Memphis.`;
-    }
-
-    const blocks = [
-      {
-        type: 'section',
-        text: { type: 'mrkdwn', text: messageBody }
-      },
-      {
-        type: 'image',
-        image_url: `${SCREENSHOT_URL}?t=${cacheBust}`,
-        alt_text: `Shipping heatmap for ${date}`
-      },
-      {
-        type: 'section',
-        text: { type: 'mrkdwn', text: ':bar_chart: *Explore the full county-level breakdown:*' },
-        accessory: {
-          type: 'button',
-          text: { type: 'plain_text', text: 'Open Interactive Heatmap', emoji: true },
-          url: HEATMAP_URL,
-          style: 'primary'
-        }
-      }
-    ];
-
-    const fallbackText = `Shipping Report — ${date}`;
-    console.log('Posting to Slack...');
-    await postToSlack(token, blocks, fallbackText);
-    console.log('Slack message posted successfully');
+    // Save report data for the post step
+    const reportData = {
+      level: report.level,
+      reportText,
+      memphisAffected,
+      memphisAlert,
+      date: formatDate()
+    };
+    fs.writeFileSync(REPORT_JSON, JSON.stringify(reportData, null, 2));
+    console.log(`Report data saved: ${REPORT_JSON}`);
 
   } finally {
     await browser.close();
   }
-})();
+}
+
+// ── Post mode ────────────────────────────────────────────────────
+
+async function runPost() {
+  const token = process.env.SLACK_BOT_TOKEN;
+  if (!token) {
+    console.error('SLACK_BOT_TOKEN environment variable is required');
+    process.exit(1);
+  }
+
+  if (!fs.existsSync(REPORT_JSON)) {
+    console.error(`Report data not found: ${REPORT_JSON}. Run with --screenshot first.`);
+    process.exit(1);
+  }
+
+  const reportData = JSON.parse(fs.readFileSync(REPORT_JSON, 'utf8'));
+  const { level, reportText, memphisAffected, memphisAlert, date } = reportData;
+
+  const emoji = { high: ':red_circle:', moderate: ':large_orange_circle:', low: ':large_green_circle:' }[level];
+  const riskLabel = { high: 'HIGH DISRUPTION', moderate: 'MODERATE DISRUPTION', low: 'LOW RISK' }[level];
+  const cacheBust = Date.now();
+
+  let messageBody = `${emoji} *Shipping Report — ${date}*\n*${riskLabel}*\n\n${reportText}`;
+
+  // Add Memphis superhub callout for moderate/high
+  if (memphisAffected && level !== 'low') {
+    messageBody += `\n\n:warning: *FedEx Memphis Superhub (Shelby County, TN)* under ${memphisAlert} — expect significant delays on packages routing through Memphis.`;
+  }
+
+  const blocks = [
+    {
+      type: 'section',
+      text: { type: 'mrkdwn', text: messageBody }
+    },
+    {
+      type: 'image',
+      image_url: `${SCREENSHOT_URL}?t=${cacheBust}`,
+      alt_text: `Shipping heatmap for ${date}`
+    },
+    {
+      type: 'section',
+      text: { type: 'mrkdwn', text: ':bar_chart: *Explore the full county-level breakdown:*' },
+      accessory: {
+        type: 'button',
+        text: { type: 'plain_text', text: 'Open Interactive Heatmap', emoji: true },
+        url: HEATMAP_URL,
+        style: 'primary'
+      }
+    }
+  ];
+
+  const fallbackText = `Shipping Report — ${date}`;
+  console.log('Posting to Slack...');
+  await postToSlack(token, blocks, fallbackText);
+  console.log('Slack message posted successfully');
+}
+
+// ── CLI ──────────────────────────────────────────────────────────
+
+const mode = process.argv[2];
+if (mode === '--screenshot') {
+  runScreenshot().catch(err => { console.error(err); process.exit(1); });
+} else if (mode === '--post') {
+  runPost().catch(err => { console.error(err); process.exit(1); });
+} else {
+  console.error('Usage: daily-report.js --screenshot | --post');
+  process.exit(1);
+}
