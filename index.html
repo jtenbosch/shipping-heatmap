@@ -286,6 +286,9 @@ const fedexAlerts = [
 // ── County name lookup (built from TopoJSON after load) ──────────
 let countyNameLookup = {}; // fips -> name
 
+// Normalize FIPS to 5-digit zero-padded string
+function padFips(id) { return String(id).padStart(5, '0'); }
+
 // ── Data state ───────────────────────────────────────────────────
 let countyScores = {};
 let topoData = null;
@@ -419,7 +422,7 @@ function renderMap() {
   const countiesGeo = topojson.feature(topoData, topoData.objects.counties);
   countyLayer = L.geoJSON(countiesGeo, {
     style: feature => {
-      const fips = feature.id;
+      const fips = padFips(feature.id);
       const data = countyScores[fips];
       const score = data ? data.score : 0;
       return {
@@ -501,7 +504,7 @@ function highlightCounty(e, feature) {
   highlightLayer.clearLayers();
   highlightLayer.addData(feature);
 
-  const fips = feature.id;
+  const fips = padFips(feature.id);
   const data = countyScores[fips];
   const countyName = data ? data.name : (feature.properties.name || 'Unknown');
   const stAbbr = data ? data.state : stateFips[fips.substring(0, 2)] || '';
@@ -530,7 +533,7 @@ function resetHighlight(e) {
 }
 
 function showDetail(feature) {
-  const fips = feature.id;
+  const fips = padFips(feature.id);
   const data = countyScores[fips];
   const countyName = data ? data.name : (feature.properties.name || 'Unknown');
   const stAbbr = data ? data.state : stateFips[fips.substring(0, 2)] || '';
@@ -767,7 +770,7 @@ async function refreshData() {
       topoData = await topoResp.json();
       // Build county name lookup
       for (const g of topoData.objects.counties.geometries) {
-        countyNameLookup[g.id] = g.properties.name;
+        countyNameLookup[padFips(g.id)] = g.properties.name;
       }
     }
 
