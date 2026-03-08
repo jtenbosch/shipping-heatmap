@@ -268,10 +268,10 @@ const eventScores = {
   'Winter Weather': 5, 'Freezing Rain': 7, 'Wind Chill': 4, 'Extreme Cold': 5,
   'Frost': 2, 'Freeze': 3,
   'Hurricane': 10, 'Tropical Storm': 8, 'Storm Surge': 7, 'Tornado': 9,
-  'Severe Thunderstorm': 6, 'Flash Flood': 8, 'Flood': 7, 'Coastal Flood': 5,
-  'High Wind': 6, 'Extreme Wind': 9, 'Wind': 4, 'Dust Storm': 6,
-  'Dense Fog': 5, 'Freezing Fog': 6, 'Fire Weather': 2, 'Red Flag': 2,
-  'Excessive Heat': 3, 'Heat': 2, 'Dense Smoke': 5, 'Avalanche': 5,
+  'Severe Thunderstorm': 5, 'Flash Flood': 6, 'Flood': 3, 'Coastal Flood': 3,
+  'High Wind': 3, 'Extreme Wind': 9, 'Wind': 2, 'Dust Storm': 4,
+  'Dense Fog': 2, 'Freezing Fog': 6, 'Fire Weather': 1, 'Red Flag': 1,
+  'Excessive Heat': 3, 'Heat': 2, 'Dense Smoke': 3, 'Avalanche': 5,
 };
 const severityMultiplier = {
   'Extreme': 2.0, 'Severe': 1.5, 'Moderate': 1.0, 'Minor': 0.6, 'Unknown': 0.8
@@ -674,7 +674,7 @@ function generateReport() {
   let level, statusLabel;
   if (severeCounties > 20 || maxRegionScore > 3000 || totalCounties > 800) {
     level = 'high'; statusLabel = 'HIGH DISRUPTION';
-  } else if (significantCounties > 20 || maxRegionScore > 1000 || totalCounties > 300) {
+  } else if (significantCounties > 20 || maxRegionScore > 1500 || totalCounties > 500) {
     level = 'moderate'; statusLabel = 'MODERATE DISRUPTION';
   } else {
     level = 'low'; statusLabel = 'LOW RISK';
