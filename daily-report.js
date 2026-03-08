@@ -16,7 +16,7 @@ const fs = require('fs');
 
 const SLACK_CHANNEL = 'C0AJPKT1FTJ';
 const HEATMAP_URL = 'https://jtenbosch.github.io/shipping-heatmap/';
-const SCREENSHOT_URL = 'https://jtenbosch.github.io/shipping-heatmap/screenshots/latest.png';
+const SCREENSHOT_BASE_URL = 'https://jtenbosch.github.io/shipping-heatmap/screenshots';
 const MEMPHIS_FIPS = '47157';
 const REPORT_JSON = path.join(__dirname, 'report.json');
 
@@ -40,6 +40,15 @@ function formatDate() {
   });
 }
 
+function todayStamp() {
+  const now = new Date();
+  const pst = new Date(now.toLocaleString('en-US', { timeZone: 'America/Los_Angeles' }));
+  const y = pst.getFullYear();
+  const m = String(pst.getMonth() + 1).padStart(2, '0');
+  const d = String(pst.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
 async function postToSlack(token, blocks, fallbackText) {
   const res = await fetch('https://slack.com/api/chat.postMessage', {
     method: 'POST',
@@ -54,7 +63,7 @@ async function postToSlack(token, blocks, fallbackText) {
     })
   });
   const data = await res.json();
-  if (!data.ok) throw new Error(`Slack API error: ${data.error}`);
+  if (!data.ok) throw new Error(`Slack API error: ${data.error}${data.response_metadata ? ' — ' + JSON.stringify(data.response_metadata) : ''}`);
   return data;
 }
 
@@ -134,9 +143,22 @@ async function runScreenshot() {
 
     const screenshotDir = path.join(__dirname, 'screenshots');
     if (!fs.existsSync(screenshotDir)) fs.mkdirSync(screenshotDir);
-    const screenshotPath = path.join(screenshotDir, 'latest.png');
-    await page.screenshot({ path: screenshotPath, type: 'png' });
-    console.log(`Screenshot saved: ${screenshotPath}`);
+    const dateStamp = todayStamp();
+    const latestPath = path.join(screenshotDir, 'latest.png');
+    const datedPath = path.join(screenshotDir, `${dateStamp}.png`);
+    await page.screenshot({ path: latestPath, type: 'png' });
+    fs.copyFileSync(latestPath, datedPath);
+    console.log(`Screenshots saved: latest.png + ${dateStamp}.png`);
+
+    // Update OG image tag in index.html to use dated screenshot URL
+    const indexPath = path.join(__dirname, 'index.html');
+    let indexHtml = fs.readFileSync(indexPath, 'utf8');
+    indexHtml = indexHtml.replace(
+      /(<meta property="og:image" content=")[^"]*(")/,
+      `$1${SCREENSHOT_BASE_URL}/${dateStamp}.png$2`
+    );
+    fs.writeFileSync(indexPath, indexHtml);
+    console.log(`Updated OG image tag to ${dateStamp}.png`);
 
     // Save report data for the post step
     const reportData = {
@@ -144,7 +166,8 @@ async function runScreenshot() {
       reportText,
       memphisAffected,
       memphisAlert,
-      date: formatDate()
+      date: formatDate(),
+      dateStamp
     };
     fs.writeFileSync(REPORT_JSON, JSON.stringify(reportData, null, 2));
     console.log(`Report data saved: ${REPORT_JSON}`);
@@ -169,11 +192,11 @@ async function runPost() {
   }
 
   const reportData = JSON.parse(fs.readFileSync(REPORT_JSON, 'utf8'));
-  const { level, reportText, memphisAffected, memphisAlert, date } = reportData;
+  const { level, reportText, memphisAffected, memphisAlert, date, dateStamp } = reportData;
 
   const emoji = { high: ':red_circle:', moderate: ':large_orange_circle:', low: ':large_green_circle:' }[level];
   const riskLabel = { high: 'HIGH DISRUPTION', moderate: 'MODERATE DISRUPTION', low: 'LOW RISK' }[level];
-  const cacheBust = Date.now();
+  const screenshotUrl = `${SCREENSHOT_BASE_URL}/${dateStamp}.png`;
 
   let messageBody = `${emoji} *Shipping Report — ${date}*\n*${riskLabel}*\n\n${reportText}`;
 
@@ -189,7 +212,8 @@ async function runPost() {
     },
     {
       type: 'image',
-      image_url: `${SCREENSHOT_URL}?t=${cacheBust}`,
+      title: { type: 'plain_text', text: `Shipping Heatmap — ${date}` },
+      image_url: screenshotUrl,
       alt_text: `Shipping heatmap for ${date}`
     },
     {
