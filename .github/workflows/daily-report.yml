@@ -21,15 +21,19 @@ jobs:
         run: npm install
 
       - name: Generate screenshot and report data
+        id: screenshot
+        continue-on-error: true
         run: node daily-report.js --screenshot
 
       - name: Clean up screenshots older than 30 days
+        if: steps.screenshot.outcome == 'success'
         run: |
           cd screenshots
           find . -name '????-??-??.png' -mtime +30 -delete 2>/dev/null || true
           cd ..
 
       - name: Commit and push screenshot + OG update
+        if: steps.screenshot.outcome == 'success'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -38,6 +42,7 @@ jobs:
           git push
 
       - name: Wait for GitHub Pages deployment
+        if: steps.screenshot.outcome == 'success'
         run: sleep 90
 
       - name: Post report to Slack

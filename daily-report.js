@@ -186,49 +186,71 @@ async function runPost() {
     process.exit(1);
   }
 
-  if (!fs.existsSync(REPORT_JSON)) {
-    console.error(`Report data not found: ${REPORT_JSON}. Run with --screenshot first.`);
-    process.exit(1);
-  }
+  const hasReport = fs.existsSync(REPORT_JSON);
+  let blocks, fallbackText;
 
-  const reportData = JSON.parse(fs.readFileSync(REPORT_JSON, 'utf8'));
-  const { level, reportText, memphisAffected, memphisAlert, date, dateStamp } = reportData;
+  if (hasReport) {
+    const reportData = JSON.parse(fs.readFileSync(REPORT_JSON, 'utf8'));
+    const { level, reportText, memphisAffected, memphisAlert, date, dateStamp } = reportData;
 
-  const emoji = { high: ':red_circle:', moderate: ':large_orange_circle:', low: ':large_green_circle:' }[level];
-  const riskLabel = { high: 'HIGH DISRUPTION', moderate: 'MODERATE DISRUPTION', low: 'LOW RISK' }[level];
-  const screenshotUrl = `${SCREENSHOT_BASE_URL}/${dateStamp}.png`;
+    const emoji = { high: ':red_circle:', moderate: ':large_orange_circle:', low: ':large_green_circle:' }[level];
+    const riskLabel = { high: 'HIGH DISRUPTION', moderate: 'MODERATE DISRUPTION', low: 'LOW RISK' }[level];
+    const screenshotUrl = `${SCREENSHOT_BASE_URL}/${dateStamp}.png`;
 
-  let messageBody = `${emoji} *Shipping Report — ${date}*\n*${riskLabel}*\n\n${reportText}`;
+    let messageBody = `${emoji} *Shipping Report — ${date}*\n*${riskLabel}*\n\n${reportText}`;
 
-  // Add Memphis superhub callout for moderate/high
-  if (memphisAffected && level !== 'low') {
-    messageBody += `\n\n:warning: *FedEx Memphis Superhub (Shelby County, TN)* under ${memphisAlert} — expect significant delays on packages routing through Memphis.`;
-  }
-
-  const blocks = [
-    {
-      type: 'section',
-      text: { type: 'mrkdwn', text: messageBody }
-    },
-    {
-      type: 'image',
-      title: { type: 'plain_text', text: `Shipping Heatmap — ${date}` },
-      image_url: screenshotUrl,
-      alt_text: `Shipping heatmap for ${date}`
-    },
-    {
-      type: 'section',
-      text: { type: 'mrkdwn', text: ':bar_chart: *Explore the full county-level breakdown:*' },
-      accessory: {
-        type: 'button',
-        text: { type: 'plain_text', text: 'Open Interactive Heatmap', emoji: true },
-        url: HEATMAP_URL,
-        style: 'primary'
-      }
+    // Add Memphis superhub callout for moderate/high
+    if (memphisAffected && level !== 'low') {
+      messageBody += `\n\n:warning: *FedEx Memphis Superhub (Shelby County, TN)* under ${memphisAlert} — expect significant delays on packages routing through Memphis.`;
     }
-  ];
 
-  const fallbackText = `Shipping Report — ${date}`;
+    blocks = [
+      {
+        type: 'section',
+        text: { type: 'mrkdwn', text: messageBody }
+      },
+      {
+        type: 'image',
+        title: { type: 'plain_text', text: `Shipping Heatmap — ${date}` },
+        image_url: screenshotUrl,
+        alt_text: `Shipping heatmap for ${date}`
+      },
+      {
+        type: 'section',
+        text: { type: 'mrkdwn', text: ':bar_chart: *Explore the full county-level breakdown:*' },
+        accessory: {
+          type: 'button',
+          text: { type: 'plain_text', text: 'Open Interactive Heatmap', emoji: true },
+          url: HEATMAP_URL,
+          style: 'primary'
+        }
+      }
+    ];
+
+    fallbackText = `Shipping Report — ${date}`;
+  } else {
+    console.warn('Report data not found — posting fallback message without screenshot.');
+    const date = formatDate();
+
+    blocks = [
+      {
+        type: 'section',
+        text: { type: 'mrkdwn', text: `:warning: *Shipping Report — ${date}*\n*DATA UNAVAILABLE*\n\nThe automated report could not fetch weather data this morning. Check the interactive heatmap for the latest conditions.` }
+      },
+      {
+        type: 'section',
+        text: { type: 'mrkdwn', text: ':bar_chart: *Check the live heatmap:*' },
+        accessory: {
+          type: 'button',
+          text: { type: 'plain_text', text: 'Open Interactive Heatmap', emoji: true },
+          url: HEATMAP_URL,
+          style: 'primary'
+        }
+      }
+    ];
+
+    fallbackText = `Shipping Report — ${date} (data unavailable)`;
+  }
   console.log('Posting to Slack...');
   await postToSlack(token, blocks, fallbackText);
   console.log('Slack message posted successfully');
