@@ -6,10 +6,18 @@ on:
 
 permissions:
   contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
 
 jobs:
   report:
     runs-on: ubuntu-latest
+    environment:
+      name: github-pages
     steps:
       - uses: actions/checkout@v4
 
@@ -41,9 +49,24 @@ jobs:
           git diff --cached --quiet || git commit -m "Update daily heatmap screenshot"
           git push
 
-      - name: Wait for GitHub Pages deployment
+      - name: Deploy to GitHub Pages
         if: steps.screenshot.outcome == 'success'
-        run: sleep 90
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        if: steps.screenshot.outcome == 'success'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: .
+
+      - name: Deploy Pages
+        if: steps.screenshot.outcome == 'success'
+        id: pages-deploy
+        uses: actions/deploy-pages@v4
+
+      - name: Wait for Pages CDN propagation
+        if: steps.screenshot.outcome == 'success'
+        run: sleep 30
 
       - name: Post report to Slack
         run: node daily-report.js --post
